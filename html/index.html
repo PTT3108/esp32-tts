@@ -1,0 +1,53 @@
+@@require(PLATFORM, VERSION)
+<!DOCTYPE HTML>
+<html lang="en">
+
+<head>
+	<title>Firmware Update</title>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<link rel="stylesheet" href="LoraMesh.css" />
+</head>
+
+<body>
+	<header class="mui-appbar mui--z1 mui--text-center LoraMesh-header">
+		<h1><b>Firmware Update</b></h1>
+		<b>Firmware Rev.</b> @@{VERSION}
+	</header>
+	<br />
+	<div class="mui-container-fluid">
+		<div class="mui-panel mui-col-sm-10 mui-col-sm-offset-1">
+			<h2>Firmware Update</h2>
+			<p>
+				Select the correct <strong>firmware.bin@@{ ".gz" }</strong> for your device. Ensure the file is not
+				corrupted.
+				If a bad flash occurs, you may need to recover via USB/Serial.
+			</p>
+			<p>
+				You can also <a href="firmware.bin" title="Click to download firmware">download the currently running firmware</a>.
+			</p>
+			<!-- Button for uploading the firmware -->
+			<button id="upload_btn" class="mui-btn mui-btn--primary upload" style="margin: 0 auto; display:block;">
+				<label>
+					Select firmware file
+					<input type="file" id="firmware_file" name="update[]" />
+				</label>
+			</button>
+			<div id="filedrag">or drop firmware file here</div>
+			<br/>
+			<!-- Status and progress bar -->
+			<h3 id="status"></h3>
+			<progress id="progressBar" value="0" max="100" style="width:100%;"></progress>
+			<!-- Buttons for updating to STM32 or ESP32 -->
+			<div style="text-align: center; margin-top: 20px;">
+				<button id="update_stm32" class="mui-btn mui-btn--primary" onclick="updateToSTM32()">Update to STM32</button>
+				<button id="update_esp32" class="mui-btn mui-btn--primary" onclick="updateToESP32()">Update to ESP32</button>
+			</div>
+		</div>
+	</div>
+
+	<script src="firmware_update.js"></script>
+	<script src="mui.js"></script>
+</body>
+
+</html>
