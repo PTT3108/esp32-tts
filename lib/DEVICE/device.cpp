@@ -1,9 +1,10 @@
+
 #include "common.h"
-#include "logging.h"
+#include "helps.h"
 #include "device.h"
 
 
-#if defined(PLATFORM_ESP32)
+#if defined(PLATFORMIO_ESP32)
 #include <soc/soc_caps.h>
 #define MULTICORE (SOC_CPU_CORES_NUM > 1)
 #endif
@@ -110,26 +111,26 @@ static int _devicesUpdate(unsigned long now)
     const int32_t core = CURRENT_CORE;
     const int32_t coreMulti = (core == -1) ? 0 : core;
 
-    bool newModelMatch = connectionHasModelMatch && teamraceHasModelMatch;
-    uint32_t events = eventFired[coreMulti];
-    eventFired[coreMulti] = 0;
-    bool handleEvents = events != 0 || lastModelMatch[coreMulti] != newModelMatch;
-    lastModelMatch[coreMulti] = newModelMatch;
+    // bool newModelMatch = connectionHasModelMatch && teamraceHasModelMatch;
+    // uint32_t events = eventFired[coreMulti];
+    // eventFired[coreMulti] = 0;
+    // bool handleEvents = events != 0 || lastModelMatch[coreMulti] != newModelMatch;
+    // lastModelMatch[coreMulti] = newModelMatch;
 
-    if (handleEvents)
-    {
-        for(size_t i=0 ; i<deviceCount ; i++)
-        {
-            if ((uiDevices[i].core == core || core == -1) && (uiDevices[i].device->event && (uiDevices[i].device->subscribe & events) != 0))
-            {
-                int delay = (uiDevices[i].device->event)();
-                if (delay != DURATION_IGNORE)
-                {
-                    deviceTimeout[i] = delay == DURATION_NEVER ? 0xFFFFFFFF : now + delay;
-                }
-            }
-        }
-    }
+    // if (handleEvents)
+    // {
+    //     for(size_t i=0 ; i<deviceCount ; i++)
+    //     {
+    //         if ((uiDevices[i].core == core || core == -1) && (uiDevices[i].device->event && (uiDevices[i].device->subscribe & events) != 0))
+    //         {
+    //             int delay = (uiDevices[i].device->event)();
+    //             if (delay != DURATION_IGNORE)
+    //             {
+    //                 deviceTimeout[i] = delay == DURATION_NEVER ? 0xFFFFFFFF : now + delay;
+    //             }
+    //         }
+    //     }
+    // }
 
     int smallest_delay = DURATION_NEVER;
     for(size_t i=0 ; i<deviceCount ; i++)

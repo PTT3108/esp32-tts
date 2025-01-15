@@ -31,7 +31,7 @@ public:
     boolean Flash(String bin_file_name);
     boolean EraseChip();
     String stm32Read(unsigned long rdaddress, unsigned char rdlen);
-    void FileUpdate(String file_path);
+    boolean FileUpdate(String file_path);
     int hasError()
     {return Sussces;}
 

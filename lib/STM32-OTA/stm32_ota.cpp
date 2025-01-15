@@ -207,7 +207,7 @@ boolean stm32_ota::Flash(String bin_file_name)
         fsUploadFile.read(binread, lastbuf);
         SendCommand(STM32WR);
         while (!OTA_uart->available())
-            ;
+            vTaskDelay(1);
         cflag = OTA_uart->read();
         if (cflag == STM32ACK)
             if (Address(STM32STADDR + (256 * bini)) == STM32ACK)
@@ -380,16 +380,21 @@ char stm32_ota::chipVersion()
     }
 }
 
-void stm32_ota::FileUpdate(String file_path)
+boolean stm32_ota::FileUpdate(String file_path)
 {
+    boolean sussces = 0;
     String aux = conect();
     if (aux != "ERROR")
     {
-        EraseChip();
-        Flash(file_path);
+        sussces = EraseChip() && (Flash(file_path));
         RunMode();
-        deletfiles(file_path);
     }
+    if (sussces)
+        ESP_LOGI(STM32_OTA_TAG, "STM32 Update Sussces");
+    else
+        ESP_LOGI(STM32_OTA_TAG, "STM32 Update Failde");
+
+    return sussces;
 }
 //----------------------------------------------------------------------------------
 // String stm32_ota::otaUpdate(String File_Url)

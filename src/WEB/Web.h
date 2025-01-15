@@ -24,9 +24,9 @@ public:
 private:
     const char *ssid = DEFAULT_WIFI_SSID;
     const char *password = DEFAULT_WIFI_PASSWORD;
-    const char *path = "/download/blink.bin"; // Đường dẫn tệp
-    // Lưu trữ tệp tải về
-    const char *filename = "/stm32ota/ota.bin";
+    // const char *path = "/download/blink.bin"; // Đường dẫn tệp
+    // // Lưu trữ tệp tải về
+    // const char *filename = "/stm32ota/ota.bin";
 
     // void wifi_init_sta();
     // bool restartWiFiData();

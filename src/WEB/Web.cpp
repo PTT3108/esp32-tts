@@ -36,7 +36,6 @@ static AsyncWebServer server(80);
 const char *wifi_hostname = "TEST";
 const char *wifi_ap_ssid = "TEST DEV";
 
-static bool stm32_seen = false;
 #define WIFI_TAG "WIFI DEVICE"
 
 static bool force_update = false;
@@ -228,18 +227,46 @@ static void HandleReset(AsyncWebServerRequest *request)
     request->client()->close();
     //   rebootTime = millis() + 100;
 }
+void flashSTM32Task(void *pvParameters)
+{
+    // Ép kiểu tham số nếu cần (nếu truyền tham số từ xTaskCreate)
+    // MyParams *params = (MyParams*)pvParameters;
+
+    // Thực hiện các bước cập nhật STM32
+    stm32_ota &ota = stm32_ota::getInstance();
+
+    ota.EraseChip();
+    ota.Flash("/stm32_firmware.bin");
+    ota.RunMode();
+    ESP_LOGI(WIFI_TAG, "Update complete, rebooting");
+    // Xóa Task sau khi xong việc
+    vTaskDelete(NULL);
+}
+void startFlashingSTM32()
+{
+    // Tạo Task "flashSTM32Task"
+    xTaskCreate(
+        flashSTM32Task,   // Tên hàm task
+        "FlashSTM32Task", // Tên gắn nhãn (dùng để debug)
+        8192,             // Stack size (tùy bạn chỉnh)
+        NULL,             // Tham số truyền vào (nếu cần)
+        1,                // Mức ưu tiên (priority)
+        NULL              // Handle cho Task (nếu cần lưu lại)
+    );
+}
+
 static void HandleSTM32Update(AsyncWebServerRequest *request, const String &filename, size_t index, uint8_t *data, size_t len, bool final)
 {
     static File uploadFile;               // Tệp tạm thời để lưu firmware
     static size_t totalBytesReceived = 0; // Tổng số byte đã nhận
     size_t filesize = request->header("X-FileSize").toInt();
-    ESP_LOGI(WIFI_TAG, "Update: '%s' size %u", filename.c_str(), filesize);
     if (index == 0) // Bắt đầu tải tệp
     {
         ESP_LOGI(WIFI_TAG, "Starting update: '%s' size %u", filename.c_str(), filesize);
+        ESP_LOGI(WIFI_TAG, "Update: '%s' size %u", filename.c_str(), filesize);
 
         // Mở tệp trên SPIFFS hoặc LittleFS
-        uploadFile = SPIFFS.open("/stm32_firmware.bin", FILE_WRITE);
+        uploadFile = SPIFFS.open(STM32_FRIMWARE_PATH, FILE_WRITE);
         if (!uploadFile)
         {
             ESP_LOGE(WIFI_TAG, "Failed to open file for writing");
@@ -247,7 +274,6 @@ static void HandleSTM32Update(AsyncWebServerRequest *request, const String &file
         }
 
         totalBytesReceived = 0;
-        stm32_seen = false;
     }
 
     // Ghi dữ liệu vào tệp
@@ -262,31 +288,69 @@ static void HandleSTM32Update(AsyncWebServerRequest *request, const String &file
     {
         if (totalBytesReceived == filesize)
         {
-            stm32_seen = true;
             ESP_LOGI(WIFI_TAG, "Upload complete: '%s', total size: %u", filename.c_str(), totalBytesReceived);
 
             // Đóng tệp
             uploadFile.close();
+            String msg;
+            // THÀNH CÔNG
+            ESP_LOGI(WIFI_TAG, "Webresponse ");
 
-            // Thực hiện cập nhật STM32 từ tệp đã nhận
-            // stm32_ota::getInstance().FileUpdate("/stm32_firmware.bin");
-            stm32_ota &ota = stm32_ota::getInstance();
-            Stm32_Target_Found = ota.conect();
+            Stm32_Target_Found = stm32_ota::getInstance().conect();
             if (Stm32_Target_Found != "ERROR")
             {
-                ota.EraseChip();
-                ota.Flash("/stm32_firmware.bin");
-                ota.RunMode();
-                ota.deletfiles("/stm32_firmware.bin");
+                startFlashingSTM32();
             }
             ESP_LOGI("STM32_update", "Uploads info: %s", Stm32_Target_Found);
         }
         else
         {
             ESP_LOGE(WIFI_TAG, "Upload incomplete. Expected: %u, Received: %u", filesize, totalBytesReceived);
-            uploadFile.close();
-            SPIFFS.remove("/stm32_firmware.bin");
+            SPIFFS.remove("STM32_FRIMWARE_PATH");
         }
+    }
+}
+
+static void STM32UpdateResponseHandler(AsyncWebServerRequest *request)
+{
+
+    if (Stm32_Target_Found != "ERROR")
+    {
+        String msg;
+        // THÀNH CÔNG
+        ESP_LOGI(WIFI_TAG, "Webresponse ");
+
+        msg = String("{\"status\": \"ok\", \"msg\": \"Update complete. ");
+        msg += "Please wait for a few seconds while the device " + Stm32_Target_Found + " reboots.\"}";
+
+        AsyncWebServerResponse *response = request->beginResponse(200, "application/json", msg);
+        response->addHeader("Connection", "close");
+        request->send(response);
+    }
+    else
+    {
+        // LỖI (có lỗi thật sự khi nạp)
+        ESP_LOGI(WIFI_TAG, "Failed to upload firmware");
+
+        // Tùy ý bạn ghi thêm mô tả lỗi nếu có
+        String msg = "{\"status\": \"error\", \"msg\": \"Update failed " + Stm32_Target_Found + ".\"}";
+
+        AsyncWebServerResponse *response = request->beginResponse(200, "application/json", msg);
+        response->addHeader("Connection", "close");
+        request->send(response);
+    }
+}
+
+static void STM32UpdateForceUpdateHandler(AsyncWebServerRequest *request)
+{
+    if (request->arg("action").equals("confirm"))
+    {
+        STM32UpdateResponseHandler(request);
+        request->send(200, "application/json", "{\"status\": \"ok\", \"msg\": \"Update cancelled\"}");
+    }
+    else
+    {
+        request->send(200, "application/json", "{\"status\": \"ok\", \"msg\": \"Update cancelled\"}");
     }
 }
 
@@ -353,71 +417,6 @@ static void corsPreflightResponse(AsyncWebServerRequest *request)
     AsyncWebServerResponse *response = request->beginResponse(204, "text/plain");
     request->send(response);
 }
-static void STM32UpdateResponseHandler(AsyncWebServerRequest *request)
-{
-    // Giả sử hàm hasError() trả về:
-    // 0 => không lỗi, 1 => có lỗi
-    int stm32_error = stm32_ota::getInstance().hasError();
-
-    // Trường hợp THÀNH CÔNG là: (stm32_seen == true) VÀ (stm32_error == 0)
-    // Trường hợp LỖI là: (stm32_error == 1)  (bỏ qua stm32_seen)
-    // Còn lại => mismatch
-    if (stm32_seen && (stm32_error == 0))
-    {
-        // THÀNH CÔNG
-        ESP_LOGI(WIFI_TAG, "Update complete, rebooting");
-
-        String msg = "{\"status\": \"ok\", \"msg\": \"Update complete. "
-                     "Please wait for a few seconds while the device reboots.\"}";
-
-        AsyncWebServerResponse* response = request->beginResponse(200, "application/json", msg);
-        response->addHeader("Connection", "close");
-        request->send(response);
-        request->client()->close();
-    }
-    else if (stm32_error == 1)
-    {
-        // LỖI (có lỗi thật sự khi nạp)
-        ESP_LOGI(WIFI_TAG, "Failed to upload firmware");
-        
-        // Tùy ý bạn ghi thêm mô tả lỗi nếu có
-        String msg = "{\"status\": \"error\", \"msg\": \"Update failed.\"}";
-
-        AsyncWebServerResponse* response = request->beginResponse(200, "application/json", msg);
-        response->addHeader("Connection", "close");
-        request->send(response);
-        request->client()->close();
-    }
-    else
-    {
-        // MISMATCH (chưa thấy target STM32 hoặc sai target)
-        String message = "{\"status\": \"mismatch\", \"msg\": \"<b>Current target:</b> .<br>";
-        if (Stm32_Target_Found != "ERROR")
-        {
-            message += "<b>Uploaded image:</b> " + Stm32_Target_Found + ".<br/>";
-        }
-        message += "<br/>It looks like you are flashing firmware with a different name to the current firmware. "
-                   "This sometimes happens because the hardware was flashed from the factory with an early version "
-                   "that has a different name. Or it may have changed between major releases."
-                   "<br/><br/>Please double check you are uploading the correct target, "
-                   "then proceed with 'Flash Anyway'.\"}";
-
-        request->send(200, "application/json", message);
-    }
-}
-static void STM32UpdateForceUpdateHandler(AsyncWebServerRequest *request)
-{
-    stm32_seen = true;
-    if (request->arg("action").equals("confirm"))
-    {
-        STM32UpdateResponseHandler(request);
-        request->send(200, "application/json", "{\"status\": \"ok\", \"msg\": \"Update cancelled\"}");
-    }
-    else
-    {
-        request->send(200, "application/json", "{\"status\": \"ok\", \"msg\": \"Update cancelled\"}");
-    }
-}
 
 void DEV_Wifi::startServices()
 {
@@ -426,6 +425,7 @@ void DEV_Wifi::startServices()
     server.on("/mui.js", WebUpdateSendContent);
     server.on("/firmware_update.js", WebUpdateSendContent);
     server.on("/firmware.bin", WebUpdateGetFirmware);
+
     server.on("/update/stm32", HTTP_POST, STM32UpdateResponseHandler, HandleSTM32Update);
     server.on("/update/stm32", HTTP_OPTIONS, corsPreflightResponse);
     server.on("/forceupdate", STM32UpdateForceUpdateHandler);
