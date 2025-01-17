@@ -3,6 +3,13 @@
 #include <WiFi.h>
 #include "SPIFFS.h"
 #include <ESPmDNS.h>
+#include <Update.h>
+#include <esp_partition.h>
+#include <esp_ota_ops.h>
+#include <soc/uart_pins.h>
+#include "Preferences.h"
+#include "spi_flash_mmap.h"
+#include <mbedtls/sha256.h>
 #elif defined(ESP8266)
 #include <ESP8266WiFi.h>
 #include <ESPAsyncTCP.h>
@@ -15,16 +22,19 @@
 #include "Arduino.h"
 #include "WebContent.h"
 #include "helps.h"
+#include "common.h"
+
 #include "Web.h"
+#include "logging.h"
+
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
-#include "esp_ota_ops.h"
-#include <Update.h>
-#include <esp_partition.h>
-#include <esp_ota_ops.h>
-#include "esp_spi_flash.h"
+#include "device.h"
 
 #include "stm32_ota.h"
+#include "SENSOR/devSensor.h"
+
+#include "ArduinoJson.h"
 
 static const byte DNS_PORT = 53;
 static IPAddress netMsk(255, 255, 255, 0);
@@ -38,9 +48,105 @@ const char *wifi_ap_ssid = "TEST DEV";
 
 #define WIFI_TAG "WIFI DEVICE"
 
+static bool target_seen = false;
+static uint32_t totalSize;
 static bool force_update = false;
 String Stm32_Target_Found;
 
+Preferences preferences;
+
+bool deviceStates[5] = {false, false, false, false, false};
+
+void SensorhandleRequest(AsyncWebServerRequest *request)
+{
+    StaticJsonDocument<70> doc;
+    JsonObject root = doc.to<JsonObject>();
+    JsonObject dataObj = root.createNestedObject("data");
+
+    // Cập nhật thông điệp cảm biến và nhận mã trạng thái
+    int status = updateSensormessage(dataObj);
+    String jsonString;
+    serializeJson(doc, jsonString);
+    ESP_LOGI("Measuarement", "Sensor: %s", jsonString);
+    request->send(200, "application/json", jsonString);
+}
+static void initDevice()
+{
+    pinMode(DEVICE_1, OUTPUT);
+    pinMode(DEVICE_2, OUTPUT);
+    pinMode(DEVICE_3, OUTPUT);
+    pinMode(DEVICE_4, OUTPUT);
+    pinMode(DEVICE_5, OUTPUT);
+}
+void updateDeviceStates()
+{
+    digitalWrite(DEVICE_1, deviceStates[0] ? HIGH : LOW);
+    digitalWrite(DEVICE_2, deviceStates[1] ? HIGH : LOW);
+    digitalWrite(DEVICE_3, deviceStates[2] ? HIGH : LOW);
+    digitalWrite(DEVICE_4, deviceStates[3] ? HIGH : LOW);
+    digitalWrite(DEVICE_5, deviceStates[4] ? HIGH : LOW);
+}
+// Hàm tải trạng thái thiết bị từ NVS
+void loadDeviceStates()
+{
+    ESP_LOGI(WIFI_TAG, "Loading device states from NVS...");
+    for (int i = 0; i < 5; i++)
+    {
+        // Tên key cho mỗi thiết bị
+        String key = "device" + String(i);
+        // Lấy giá trị từ NVS, nếu không tìm thấy thì giữ nguyên giá trị hiện tại
+        deviceStates[i] = preferences.getBool(key.c_str(), deviceStates[i]);
+        ESP_LOGI(WIFI_TAG, "Loaded deviceStates[%d] = %s\n", i, deviceStates[i] ? "true" : "false");
+    }
+    updateDeviceStates();
+}
+
+// Hàm lưu trạng thái thiết bị vào NVS
+void saveDeviceStates()
+{
+    for (int i = 0; i < 5; i++)
+    {
+        // Tên key cho mỗi thiết bị
+        String key = "device" + String(i);
+        // Lưu giá trị vào NVS
+        preferences.putBool(key.c_str(), deviceStates[i]);
+        // ESP_LOGI(WIFI_TAG,"Saved deviceStates[%d] = %s\n", i, deviceStates[i] ? "true" : "false");
+    }
+    updateDeviceStates();
+}
+
+String loadFilenameFromNVS()
+{
+    ESP_LOGI(WIFI_TAG, "Loading filename from NVS...");
+    // Key cho filename
+    const char *filenameKey = "filename";
+
+    // Đọc chuỗi từ NVS, nếu không tìm thấy thì trả về chuỗi rỗng
+    String filename = preferences.getString(filenameKey, "");
+
+    if (filename.length() > 0)
+    {
+        ESP_LOGI(WIFI_TAG, "Loaded filename: %s\n", filename.c_str());
+    }
+    else
+    {
+        ESP_LOGI(WIFI_TAG, "No filename found in NVS.");
+    }
+
+    return filename;
+}
+
+void saveFilenameToNVS(const String &filename)
+{
+    ESP_LOGI(WIFI_TAG, "Saving filename to NVS...");
+    // Key cho filename
+    const char *filenameKey = "filename";
+
+    // Lưu chuỗi vào NVS
+    preferences.putString(filenameKey, filename);
+
+    ESP_LOGI(WIFI_TAG, "Saved filename: %s\n", filename.c_str());
+}
 static struct
 {
     const char *url;
@@ -69,6 +175,20 @@ bool DEV_Wifi::initWiFi()
     // registerButtonFunction(ACTION_START_WIFI, []()
     //                        { setWifiUpdateMode(); });
     // WiFi.onEvent(WiFiEvent);
+
+    if (!preferences.begin("storage", false))
+    {
+        ESP_LOGI(WIFI_TAG, "Failed to initialize Preferences");
+    }
+    else
+    {
+        ESP_LOGI(WIFI_TAG, "Preferences initialized");
+    }
+
+    // Tải trạng thái thiết bị từ NVS
+    loadDeviceStates();
+    initDevice();
+    updateDeviceStates();
     return true;
 }
 
@@ -122,14 +242,6 @@ static void WebUpdateHandleRoot(AsyncWebServerRequest *request)
     force_update = request->hasArg("force");
     AsyncWebServerResponse *response;
     response = request->beginResponse(200, "text/html", (uint8_t *)INDEX_HTML, sizeof(INDEX_HTML));
-    //   if (connectionState == hardwareUndefined)
-    //   {
-    //     response = request->beginResponse(200, "text/html", (uint8_t *)HARDWARE_HTML, sizeof(HARDWARE_HTML));
-    //   }
-    //   else
-    //   {
-    //     response = request->beginResponse(200, "text/html", (uint8_t *)INDEX_HTML, sizeof(INDEX_HTML));
-    //   }
     response = request->beginResponse(200, "text/html", (uint8_t *)INDEX_HTML, sizeof(INDEX_HTML));
     response->addHeader("Content-Encoding", "gzip");
     response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -227,39 +339,12 @@ static void HandleReset(AsyncWebServerRequest *request)
     request->client()->close();
     //   rebootTime = millis() + 100;
 }
-void flashSTM32Task(void *pvParameters)
-{
-    // Ép kiểu tham số nếu cần (nếu truyền tham số từ xTaskCreate)
-    // MyParams *params = (MyParams*)pvParameters;
-
-    // Thực hiện các bước cập nhật STM32
-    stm32_ota &ota = stm32_ota::getInstance();
-
-    ota.EraseChip();
-    ota.Flash("/stm32_firmware.bin");
-    ota.RunMode();
-    ESP_LOGI(WIFI_TAG, "Update complete, rebooting");
-    // Xóa Task sau khi xong việc
-    vTaskDelete(NULL);
-}
-void startFlashingSTM32()
-{
-    // Tạo Task "flashSTM32Task"
-    xTaskCreate(
-        flashSTM32Task,   // Tên hàm task
-        "FlashSTM32Task", // Tên gắn nhãn (dùng để debug)
-        8192,             // Stack size (tùy bạn chỉnh)
-        NULL,             // Tham số truyền vào (nếu cần)
-        1,                // Mức ưu tiên (priority)
-        NULL              // Handle cho Task (nếu cần lưu lại)
-    );
-}
-
 static void HandleSTM32Update(AsyncWebServerRequest *request, const String &filename, size_t index, uint8_t *data, size_t len, bool final)
 {
     static File uploadFile;               // Tệp tạm thời để lưu firmware
     static size_t totalBytesReceived = 0; // Tổng số byte đã nhận
     size_t filesize = request->header("X-FileSize").toInt();
+    static mbedtls_sha256_context ctx;
     if (index == 0) // Bắt đầu tải tệp
     {
         ESP_LOGI(WIFI_TAG, "Starting update: '%s' size %u", filename.c_str(), filesize);
@@ -273,6 +358,11 @@ static void HandleSTM32Update(AsyncWebServerRequest *request, const String &file
             return;
         }
 
+        mbedtls_sha256_init(&ctx);
+
+        // Tham số thứ hai (0) là "is224" = false => SHA-256 (thay vì SHA-224)
+        mbedtls_sha256_starts(&ctx, 0);
+
         totalBytesReceived = 0;
     }
 
@@ -281,39 +371,49 @@ static void HandleSTM32Update(AsyncWebServerRequest *request, const String &file
     {
         uploadFile.write(data, len);
         totalBytesReceived += len;
+        mbedtls_sha256_update(&ctx, data, len);
         ESP_LOGI(WIFI_TAG, "Received %u bytes, total: %u/%u", len, totalBytesReceived, filesize);
     }
 
     if (final) // Hoàn tất tải tệp
     {
+        uint8_t hashResult[32];
+        mbedtls_sha256_finish(&ctx, hashResult);
+
+        // Giải phóng context
+        mbedtls_sha256_free(&ctx);
+
         if (totalBytesReceived == filesize)
         {
             ESP_LOGI(WIFI_TAG, "Upload complete: '%s', total size: %u", filename.c_str(), totalBytesReceived);
-
-            // Đóng tệp
-            uploadFile.close();
-            String msg;
-            // THÀNH CÔNG
-            ESP_LOGI(WIFI_TAG, "Webresponse ");
-
-            Stm32_Target_Found = stm32_ota::getInstance().conect();
-            if (Stm32_Target_Found != "ERROR")
+            ESP_LOGI("SHA", "SHA-256:");
+            for (int i = 0; i < 32; i++)
             {
-                startFlashingSTM32();
+                // In từng byte dưới dạng 2 ký tự hex
+                ESP_LOGI("SHA", "%02x", hashResult[i]);
             }
-            ESP_LOGI("STM32_update", "Uploads info: %s", Stm32_Target_Found);
+            uploadFile.close();
+
+            saveFilenameToNVS(filename);
+
+            devicesTriggerEvent(EVENT_UPDATE_FIRMWARE_STM32);
         }
         else
         {
             ESP_LOGE(WIFI_TAG, "Upload incomplete. Expected: %u, Received: %u", filesize, totalBytesReceived);
-            SPIFFS.remove("STM32_FRIMWARE_PATH");
+            SPIFFS.remove(STM32_FRIMWARE_PATH);
         }
     }
 }
-
 static void STM32UpdateResponseHandler(AsyncWebServerRequest *request)
 {
-
+    // vTaskDelay(1000 / portTICK_PERIOD_MS);
+    if (request->header("X-FileSize").toInt() == 0)
+    {
+        Stm32_Target_Found = "ERROR";
+        devicesTriggerEvent(EVENT_UPDATE_FIRMWARE_STM32);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
     if (Stm32_Target_Found != "ERROR")
     {
         String msg;
@@ -326,6 +426,7 @@ static void STM32UpdateResponseHandler(AsyncWebServerRequest *request)
         AsyncWebServerResponse *response = request->beginResponse(200, "application/json", msg);
         response->addHeader("Connection", "close");
         request->send(response);
+        Stm32_Target_Found = "ERROR";
     }
     else
     {
@@ -417,6 +518,96 @@ static void corsPreflightResponse(AsyncWebServerRequest *request)
     AsyncWebServerResponse *response = request->beginResponse(204, "text/plain");
     request->send(response);
 }
+static void WebUploadResponseHandler(AsyncWebServerRequest *request)
+{
+    if (target_seen || Update.hasError())
+    {
+        String msg;
+        if (!Update.hasError() && Update.end())
+        {
+            ESP_LOGI(WIFI_TAG, "Update complete, rebooting");
+            msg = String("{\"status\": \"ok\", \"msg\": \"Update complete. ");
+#if defined(TARGET_RX)
+            msg += "Please wait for the LED to resume blinking before disconnecting power.\"}";
+#else
+            msg += "Please wait for a few seconds while the device reboots.\"}";
+#endif
+        }
+        else
+        {
+            StreamString p = StreamString();
+            if (Update.hasError())
+            {
+                Update.printError(p);
+            }
+            else
+            {
+                p.println("Not enough data uploaded!");
+            }
+            p.trim();
+            ESP_LOGI(WIFI_TAG, "Failed to upload firmware: %s", p.c_str());
+            msg = String("{\"status\": \"error\", \"msg\": \"") + p + "\"}";
+        }
+        AsyncWebServerResponse *response = request->beginResponse(200, "application/json", msg);
+        response->addHeader("Connection", "close");
+        request->send(response);
+        request->client()->close();
+    }
+    else
+    {
+        String message = String("{\"status\": \"mismatch\", \"msg\": \"<b>Current target:</b> ") + ".<br>";
+        message += "<br/>It looks like you are flashing firmware with a different name to the current  firmware.  This sometimes happens because the hardware was flashed from the factory with an early version that has a different name. Or it may have even changed between major releases.";
+        message += "<br/><br/>Please double check you are uploading the correct target, then proceed with 'Flash Anyway'.\"}";
+        request->send(200, "application/json", message);
+    }
+}
+
+static void WebUploadDataHandler(AsyncWebServerRequest *request, const String &filename, size_t index, uint8_t *data, size_t len, bool final)
+{
+    force_update = force_update || request->hasArg("force");
+    if (index == 0)
+    {
+#if defined(TARGET_TX) && defined(PLATFORM_ESP32)
+        WifiJoystick::StopJoystickService();
+#endif
+
+        size_t filesize = request->header("X-FileSize").toInt();
+        ESP_LOGI(WIFI_TAG, "Update: '%s' size %u", filename.c_str(), filesize);
+#if defined(PLATFORM_ESP8266)
+        Update.runAsync(true);
+        uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+        ESP_LOGI(WIFI_TAG, "Free space = %u", maxSketchSpace);
+        UNUSED(maxSketchSpace); // for warning
+#endif
+        if (!Update.begin(filesize, U_FLASH))
+        { // pass the size provided
+            Update.printError(Serial);
+        }
+        target_seen = false;
+        totalSize = 0;
+    }
+    if (len)
+    {
+        ESP_LOGI(WIFI_TAG, "Writing %d bytes of firmware data.", len);
+
+        // Ghi dữ liệu vào bộ nhớ flash
+        if (Update.write(data, len) == len)
+        {
+            // Vì force_update luôn bằng true, target_seen luôn là true
+            target_seen = true; // Có thể loại bỏ nếu không sử dụng ở nơi khác
+
+            // Cập nhật tổng kích thước đã ghi
+            totalSize += len;
+
+            // Ghi log thông báo ghi thành công
+            ESP_LOGI(WIFI_TAG, "Successfully wrote %d bytes. Total written: %u bytes.", len, totalSize);
+        }
+        else
+        {
+            ESP_LOGE(WIFI_TAG, "Failed to write %d bytes of firmware data.", len);
+        }
+    }
+}
 
 void DEV_Wifi::startServices()
 {
@@ -426,8 +617,11 @@ void DEV_Wifi::startServices()
     server.on("/firmware_update.js", WebUpdateSendContent);
     server.on("/firmware.bin", WebUpdateGetFirmware);
 
+    server.on("/update/esp32", HTTP_POST, WebUploadResponseHandler, WebUploadDataHandler);
+    server.on("/update/esp32", HTTP_OPTIONS, corsPreflightResponse);
     server.on("/update/stm32", HTTP_POST, STM32UpdateResponseHandler, HandleSTM32Update);
     server.on("/update/stm32", HTTP_OPTIONS, corsPreflightResponse);
+    server.on("/measurement", HTTP_GET, SensorhandleRequest);
     server.on("/forceupdate", STM32UpdateForceUpdateHandler);
     server.on("/forceupdate", HTTP_OPTIONS, corsPreflightResponse);
 
@@ -439,6 +633,44 @@ void DEV_Wifi::startServices()
     server.on("/reboot", HandleReboot);
     server.on("/reset", HandleReset);
 
+    server.on("/getStates", HTTP_GET, [](AsyncWebServerRequest *request)
+              {
+    String json = "[";
+    for (int i = 0; i < 5; i++) {
+      json += deviceStates[i] ? "true" : "false";
+      if (i < 4) json += ",";
+    }
+    json += "]";
+    request->send(200, "application/json", json); });
+
+    // API: Thay đổi trạng thái thiết bị
+    server.on("/setState", HTTP_GET, [](AsyncWebServerRequest *request)
+              {
+                ESP_LOGI("setStatast","SETETET");
+    if (request->hasParam("index", false)) {
+      int index = request->getParam("index", false)->value().toInt();
+      if (index >= 1 && index <= 5) {
+        deviceStates[index - 1] = !deviceStates[index - 1]; // Đảo trạng thái thiết bị
+        saveDeviceStates();
+
+        request->send(200, "application/json", "{\"message\":\"Device state toggled!\"}");
+      } else {
+        request->send(400, "application/json", "{\"message\":\"Invalid device index!\"}");
+      }
+    } else {
+      request->send(400, "application/json", "{\"message\":\"Missing device index!\"}");
+    } });
+
+    server.on("/getversionfrimware", HTTP_GET, [](AsyncWebServerRequest *request)
+              {
+                    String filename = loadFilenameFromNVS();
+    
+    // Tạo phản hồi JSON
+    String jsonResponse = "{\"filename\":\"" + filename + "\"}";
+    
+    // Gửi phản hồi
+    request->send(200, "application/json", jsonResponse); });
+
     server.onNotFound(WebUpdateHandleNotFound);
     server.begin();
 
@@ -447,17 +679,6 @@ void DEV_Wifi::startServices()
 
     startMDNS();
 }
-// void DEV_Wifi::createWiFiTask() {
-//     int res = xTaskCreate(
-//         wifi_task,
-//         "WiFi Task",
-//         4096,
-//         (void*) 1,
-//         2,
-//         &wifi_TaskHandle);
-//     if (res != pdPASS)
-//         ESP_LOGE(TAG, "WiFi task handle error: %d", res);
-// }
 
 void DEV_Wifi::HandleWeb()
 {

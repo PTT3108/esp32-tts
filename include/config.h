@@ -6,3 +6,10 @@
 #define GPIO_PIN_BUTTON2 UNDEF_PIN
 
 #define STM32_FRIMWARE_PATH ("/stm32ota/ota.bin")
+
+#define DEVICE_1 12
+#define DEVICE_2 -1
+#define DEVICE_3 -1
+#define DEVICE_4 -1
+#define DEVICE_5 -1
+

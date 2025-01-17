@@ -22,6 +22,10 @@
         "initializer_list": "cpp",
         "span": "cpp",
         "*.tcc": "cpp",
-        "functional": "cpp"
+        "functional": "cpp",
+        "cstdlib": "c",
+        "random": "cpp",
+        "compare": "cpp",
+        "cstdint": "cpp"
     }
 }

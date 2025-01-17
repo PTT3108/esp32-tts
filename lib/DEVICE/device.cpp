@@ -112,25 +112,27 @@ static int _devicesUpdate(unsigned long now)
     const int32_t coreMulti = (core == -1) ? 0 : core;
 
     // bool newModelMatch = connectionHasModelMatch && teamraceHasModelMatch;
-    // uint32_t events = eventFired[coreMulti];
-    // eventFired[coreMulti] = 0;
-    // bool handleEvents = events != 0 || lastModelMatch[coreMulti] != newModelMatch;
+    uint32_t events = eventFired[coreMulti];
+    eventFired[coreMulti] = 0;
+    bool handleEvents = events != 0 || lastModelMatch[coreMulti] != false;
     // lastModelMatch[coreMulti] = newModelMatch;
+    lastModelMatch[coreMulti] = false;
 
-    // if (handleEvents)
-    // {
-    //     for(size_t i=0 ; i<deviceCount ; i++)
-    //     {
-    //         if ((uiDevices[i].core == core || core == -1) && (uiDevices[i].device->event && (uiDevices[i].device->subscribe & events) != 0))
-    //         {
-    //             int delay = (uiDevices[i].device->event)();
-    //             if (delay != DURATION_IGNORE)
-    //             {
-    //                 deviceTimeout[i] = delay == DURATION_NEVER ? 0xFFFFFFFF : now + delay;
-    //             }
-    //         }
-    //     }
-    // }
+
+    if (handleEvents)
+    {
+        for(size_t i=0 ; i<deviceCount ; i++)
+        {
+            if ((uiDevices[i].core == core || core == -1) && (uiDevices[i].device->event && (uiDevices[i].device->subscribe & events) != 0))
+            {
+                int delay = (uiDevices[i].device->event)();
+                if (delay != DURATION_IGNORE)
+                {
+                    deviceTimeout[i] = delay == DURATION_NEVER ? 0xFFFFFFFF : now + delay;
+                }
+            }
+        }
+    }
 
     int smallest_delay = DURATION_NEVER;
     for(size_t i=0 ; i<deviceCount ; i++)

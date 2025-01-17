@@ -51,16 +51,10 @@ String stm32_ota::conect()
     delay(50);
     digitalWrite(OTA_RST, HIGH);
     delay(500);
-    // for (int i = 0; i < 3; i++)
-    // {
-    //     digitalWrite(OTA_LED, !digitalRead(OTA_LED));
-    //     delay(100);
-    // }
-
+    OTA_uart->read();
     OTA_uart->write(STM32INIT);
     delay(10);
-    if (OTA_uart->available() > 0)
-        ;
+    if (OTA_uart->available() > 0);
     rdtmp = OTA_uart->read();
     ESP_LOGI(STM32_OTA_TAG, "Init Stm32: 0x:%02x", rdtmp);
 
@@ -206,8 +200,7 @@ boolean stm32_ota::Flash(String bin_file_name)
         }
         fsUploadFile.read(binread, lastbuf);
         SendCommand(STM32WR);
-        while (!OTA_uart->available())
-            vTaskDelay(1);
+        while (!OTA_uart->available());
         cflag = OTA_uart->read();
         if (cflag == STM32ACK)
             if (Address(STM32STADDR + (256 * bini)) == STM32ACK)

@@ -114,7 +114,7 @@ function completeHandler(event) {
     }
 }
 
-function  errorHandler(event) {
+function errorHandler(event) {
     _('status').innerHTML = '';
     _('progressBar').value = 0;
     _('upload_btn').disabled = false
@@ -137,38 +137,85 @@ function abortHandler(event) {
     });
 }
 
-// Hàm thực hiện upload firmware
-function startUpdateProcess(deviceType) {
-    const firmwareFile = _('firmware_file').files[0];
-    if (!firmwareFile) {
-        alert("Please select a firmware file before proceeding.");
-        return;
-    }
-
+async function startUpdateProcess(deviceType) {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
 
-    // Append dữ liệu cần thiết
-    formData.append('firmware', firmwareFile);
-    formData.append('device', deviceType);
-    formData.append('fileSize', firmwareFile.size);
+    // Lấy file từ input
+    const firmwareFile = document.getElementById("firmware_file").files[0];
 
-    console.log("Firmware File Details:");
-    console.log(`Name: ${firmwareFile.name}`);
-    console.log(`Type: ${firmwareFile.type}`);
-    console.log(`Size: ${firmwareFile.size} bytes`);
-
-    // Mở POST đến endpoint tương ứng (ví dụ: /update/stm32, /update/esp32)
-    
-    // Theo dõi quá trình upload
+    // Thiết lập listener cho xhr
     xhr.upload.addEventListener('progress', progressHandler, false);
     xhr.addEventListener('load', completeHandler, false);
     xhr.addEventListener('error', errorHandler, false);
     xhr.addEventListener('abort', abortHandler, false);
+
+    // Mở kết nối
     xhr.open('POST', `/update/${deviceType}`);
-    xhr.setRequestHeader('X-FileSize', firmwareFile.size);
+
+    // Nếu không có file, gửi 0
+    if (!firmwareFile) {
+      formData.append('firmware', 0);
+      formData.append('device', 0);
+      formData.append('fileSize', 0);
+      xhr.setRequestHeader('X-FileSize', 0);
+      console.log("No firmware file selected.");
+    } else {
+      // Đọc toàn bộ file vào ArrayBuffer
+      const fileBuffer = await firmwareFile.arrayBuffer();
+
+      // Tính SHA-256 bằng Web Crypto API
+      const hashBuffer = await crypto.subtle.digest("SHA-256", fileBuffer);
+
+      // Chuyển kết quả băm sang dạng hex
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+
+      // Thêm các trường vào FormData
+      formData.append('firmware', firmwareFile);
+      formData.append('device', deviceType);
+      formData.append('fileSize', firmwareFile.size);
+      formData.append('sha256', hashHex);  // <-- Gửi kèm giá trị SHA-256
+
+      // Set header dung lượng file
+      xhr.setRequestHeader('X-FileSize', firmwareFile.size);
+
+      // Debug thông tin
+      console.log(`Name: ${firmwareFile.name}`);
+      console.log(`Type: ${firmwareFile.type}`);
+      console.log(`Size: ${firmwareFile.size} bytes`);
+      console.log(`SHA-256: ${hashHex}`);
+    }
+
+    // Gửi form
     xhr.send(formData);
+  }
+
+function getDeviceStates() {
+    fetch("/getStates")
+        .then(response => response.json())
+        .then(data => {
+            for (let i = 0; i < 5; i++) {
+                const btn = document.getElementById('btn' + (i + 1));
+                btn.innerText = data[i] ? "Turn OFF" : "Turn ON";
+                btn.style.backgroundColor = data[i] ? "red" : "green";
+            }
+        });
 }
 
+function toggleDevice(index) {
+    fetch(`/setState?index=${index}`, { method: 'GET' })
+        .then(response => response.json())
+        .then(data => {
+            alert(data.message);
+            getDeviceStates();
+        });
+}
+
+// Tự động cập nhật trạng thái mỗi giây
+setInterval(getDeviceStates, 1000);
+
+// Lấy trạng thái ban đầu khi tải trang
+window.onload = getDeviceStates;
 @@include("libs.js")
 

@@ -1,5 +1,6 @@
-#include "Arduino.h"
+#pragma once
 
+#include "Arduino.h"
 #define MAX_BUTON_ACTION           3
 typedef enum : uint8_t {
     ACTION_NONE,
@@ -27,3 +28,6 @@ typedef union {
     } val;
     // uint32_t raw;
 } button_color_t;
+
+extern bool deviceStates[];
+extern String Stm32_Target_Found;
