@@ -13,3 +13,7 @@
 #define DEVICE_4 -1
 #define DEVICE_5 -1
 
+#define GPIO_PIN_I2S_SDA  42
+#define GPIO_PIN_I2S_SCL 1
+#define GPIO_PIN_I2S_LATCH 2
+

@@ -36,6 +36,7 @@
 
 #include "ArduinoJson.h"
 
+#include "PWM.h"
 static const byte DNS_PORT = 53;
 static IPAddress netMsk(255, 255, 255, 0);
 static DNSServer dnsServer;
@@ -51,7 +52,7 @@ const char *wifi_ap_ssid = "TEST DEV";
 static bool target_seen = false;
 static uint32_t totalSize;
 static bool force_update = false;
-String Stm32_Target_Found;
+String Stm32_Target_Found = "ERROR";
 
 Preferences preferences;
 
@@ -164,6 +165,134 @@ static struct
     // {"/cw.js", "text/javascript", (uint8_t *)CW_JS, sizeof(CW_JS)},
 };
 
+// Hàm cập nhật NVS
+void savePWMConfigToNVS(uint32_t freq1, uint8_t dir1,
+                        uint32_t freq2, uint8_t dir2,
+                        uint32_t freq3, uint8_t dir3)
+{
+    preferences.putUInt("freq1", freq1);
+    preferences.putUChar("dir1", dir1);
+
+    preferences.putUInt("freq2", freq2);
+    preferences.putUChar("dir2", dir2);
+
+    preferences.putUInt("freq3", freq3);
+    preferences.putUChar("dir3", dir3);
+
+    ESP_LOGI("Stepper NVS", "PWM config saved to NVS");
+    pwm.set_pwm(128, 127, freq1);
+    WRITE(129, dir1);
+    pwm.set_pwm(130, 127, freq2);
+    WRITE(131, dir1);
+    pwm.set_pwm(132, 127, freq3);
+    WRITE(133, dir1);
+}
+
+// Hàm load NVS + áp dụng
+void loadPWMConfigFromNVS()
+{
+    // Mặc định tần số 1000,1500,2000 Hz, dir = 0
+    uint32_t freq1 = preferences.getUInt("freq1", 1000);
+    uint8_t dir1 = preferences.getUChar("dir1", 0);
+
+    uint32_t freq2 = preferences.getUInt("freq2", 1500);
+    uint8_t dir2 = preferences.getUChar("dir2", 0);
+
+    uint32_t freq3 = preferences.getUInt("freq3", 2000);
+    uint8_t dir3 = preferences.getUChar("dir3", 0);
+
+    ESP_LOGI("Stepper NVS", "Loaded PWM config from NVS:");
+    ESP_LOGI("Stepper NVS", "CH1: freq=%u, dir=%u\n", freq1, dir1);
+    ESP_LOGI("Stepper NVS", "CH2: freq=%u, dir=%u\n", freq2, dir2);
+    ESP_LOGI("Stepper NVS", "CH3: freq=%u, dir=%u\n", freq3, dir3);
+    pwm.set_pwm(128, 127, freq1);
+    WRITE(129, dir1);
+    pwm.set_pwm(130, 127, freq2);
+    WRITE(131, dir1);
+    pwm.set_pwm(132, 127, freq3);
+    WRITE(133, dir1);
+}
+
+void handlePwmUpdate(AsyncWebServerRequest *request)
+{
+    int params = request->params();
+    // Kiểm tra dữ liệu JSON trong body
+    for (int i = 0; i < params; i++)
+    {
+        const AsyncWebParameter *p = request->getParam(i);
+        ESP_LOGI("sacsac", "_POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
+    }
+    if (request->hasArg("plain"))
+    {
+        String jsonBody = request->arg("plain"); // Chuỗi JSON
+
+        StaticJsonDocument<512> doc;
+        DeserializationError err = deserializeJson(doc, jsonBody);
+        if (err)
+        {
+            // JSON không hợp lệ
+            request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        // Lấy freq và dir cho từng channel
+        // Dùng toán tử | (hoặc) như một cách đặt giá trị mặc định
+        uint32_t freq1 = doc["channel1"]["freq"] | 1000;
+        uint8_t dir1 = doc["channel1"]["dir"] | 0;
+
+        uint32_t freq2 = doc["channel2"]["freq"] | 1500;
+        uint8_t dir2 = doc["channel2"]["dir"] | 0;
+
+        uint32_t freq3 = doc["channel3"]["freq"] | 2000;
+        uint8_t dir3 = doc["channel3"]["dir"] | 0;
+
+        // 2. Lưu vào NVS
+        savePWMConfigToNVS(freq1, dir1, freq2, dir2, freq3, dir3);
+
+        // 3. Gửi phản hồi
+        String response = "{\"status\":\"ok\",\"ch1\":{\"freq\":" + String(freq1) +
+                          ",\"dir\":" + String(dir1) +
+                          "},\"ch2\":{\"freq\":" + String(freq2) +
+                          ",\"dir\":" + String(dir2) +
+                          "},\"ch3\":{\"freq\":" + String(freq3) +
+                          ",\"dir\":" + String(dir3) + "}}";
+
+        request->send(200, "application/json", response);
+    }
+    else
+    {
+        // Không có "plain" => thiếu body
+        request->send(400, "application/json", "{\"error\":\"No JSON body\"}");
+    }
+}
+void handleGetPwmConfig(AsyncWebServerRequest *request)
+{
+    // Đọc cấu hình PWM/dir từ NVS, hoặc giá trị mặc định nếu chưa có
+    uint32_t freq1 = preferences.getUInt("freq1", 0);
+    uint8_t dir1 = preferences.getUChar("dir1", 0);
+
+    uint32_t freq2 = preferences.getUInt("freq2", 0);
+    uint8_t dir2 = preferences.getUChar("dir2", 0);
+
+    uint32_t freq3 = preferences.getUInt("freq3", 0);
+    uint8_t dir3 = preferences.getUChar("dir3", 0);
+
+    // Dựng JSON trả về
+    StaticJsonDocument<256> doc;
+    doc["channel1"]["freq"] = freq1;
+    doc["channel1"]["dir"] = dir1;
+    doc["channel2"]["freq"] = freq2;
+    doc["channel2"]["dir"] = dir2;
+    doc["channel3"]["freq"] = freq3;
+    doc["channel3"]["dir"] = dir3;
+
+    String response;
+    serializeJson(doc, response);
+
+    // Gửi phản hồi 200 OK, nội dung JSON
+    request->send(200, "application/json", response);
+}
+
 bool DEV_Wifi::initWiFi()
 {
     connected = true;
@@ -189,6 +318,7 @@ bool DEV_Wifi::initWiFi()
     loadDeviceStates();
     initDevice();
     updateDeviceStates();
+    loadPWMConfigFromNVS();
     return true;
 }
 
@@ -339,72 +469,137 @@ static void HandleReset(AsyncWebServerRequest *request)
     request->client()->close();
     //   rebootTime = millis() + 100;
 }
-static void HandleSTM32Update(AsyncWebServerRequest *request, const String &filename, size_t index, uint8_t *data, size_t len, bool final)
+
+uint32_t updateCRC32(uint32_t crc, const uint8_t *data, size_t length)
+{
+    for (size_t i = 0; i < length; i++)
+    {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++)
+        {
+            if (crc & 1)
+            {
+                crc = (crc >> 1) ^ 0xEDB88320;
+            }
+            else
+            {
+                crc >>= 1;
+            }
+        }
+    }
+    return crc;
+}
+
+static void HandleSTM32Update(AsyncWebServerRequest *request,
+                              const String &filename,
+                              size_t index,
+                              uint8_t *data,
+                              size_t len,
+                              bool final)
 {
     static File uploadFile;               // Tệp tạm thời để lưu firmware
     static size_t totalBytesReceived = 0; // Tổng số byte đã nhận
-    size_t filesize = request->header("X-FileSize").toInt();
-    static mbedtls_sha256_context ctx;
-    if (index == 0) // Bắt đầu tải tệp
-    {
-        ESP_LOGI(WIFI_TAG, "Starting update: '%s' size %u", filename.c_str(), filesize);
-        ESP_LOGI(WIFI_TAG, "Update: '%s' size %u", filename.c_str(), filesize);
+    static uint32_t firmwareCRC = 0;
 
-        // Mở tệp trên SPIFFS hoặc LittleFS
+    // Lấy dung lượng file mong đợi từ header
+    size_t filesize = request->header("X-FileSize").toInt();
+
+    if (index == 0)
+    {
+        // Bắt đầu upload
+        ESP_LOGI(WIFI_TAG, "Starting update: '%s' size=%u", filename.c_str(), filesize);
+
         uploadFile = SPIFFS.open(STM32_FRIMWARE_PATH, FILE_WRITE);
         if (!uploadFile)
         {
             ESP_LOGE(WIFI_TAG, "Failed to open file for writing");
-            return;
+            return; // Không thể ghi file -> thoát luôn
         }
 
-        mbedtls_sha256_init(&ctx);
-
-        // Tham số thứ hai (0) là "is224" = false => SHA-256 (thay vì SHA-224)
-        mbedtls_sha256_starts(&ctx, 0);
-
+        // Khởi tạo biến CRC với giá trị 0xFFFFFFFF (theo chuẩn CRC-32 IEEE)
+        firmwareCRC = 0xFFFFFFFF;
         totalBytesReceived = 0;
     }
 
-    // Ghi dữ liệu vào tệp
+    // Ghi dữ liệu vào file nếu còn mở
     if (uploadFile)
     {
         uploadFile.write(data, len);
         totalBytesReceived += len;
-        mbedtls_sha256_update(&ctx, data, len);
-        ESP_LOGI(WIFI_TAG, "Received %u bytes, total: %u/%u", len, totalBytesReceived, filesize);
+
+        // Cập nhật CRC
+        firmwareCRC = updateCRC32(firmwareCRC, data, len);
+
+        ESP_LOGI(WIFI_TAG, "Received %u bytes, total: %u/%u",
+                 len, totalBytesReceived, filesize);
     }
 
-    if (final) // Hoàn tất tải tệp
+    // Nếu là chunk cuối (final == true)
+    if (final)
     {
-        uint8_t hashResult[32];
-        mbedtls_sha256_finish(&ctx, hashResult);
+        // Đảo CRC để lấy giá trị cuối
+        firmwareCRC ^= 0xFFFFFFFF;
 
-        // Giải phóng context
-        mbedtls_sha256_free(&ctx);
+        // Đóng file (quan trọng: nên đóng file trước khi xóa hay dùng tiếp)
+        if (uploadFile)
+        {
+            uploadFile.close();
+        }
 
+        // Kiểm tra số byte đã nhận
         if (totalBytesReceived == filesize)
         {
-            ESP_LOGI(WIFI_TAG, "Upload complete: '%s', total size: %u", filename.c_str(), totalBytesReceived);
-            ESP_LOGI("SHA", "SHA-256:");
-            for (int i = 0; i < 32; i++)
+            ESP_LOGI(WIFI_TAG, "Upload complete: '%s', total size: %u",
+                     filename.c_str(), totalBytesReceived);
+
+            // In CRC tính được
+            ESP_LOGI(WIFI_TAG, "Calculated CRC-32: 0x%08X", firmwareCRC);
+
+            // Đọc CRC mong đợi từ header (nếu client gửi)
+            String expectedCRCHeader = request->header("X-CRC32");
+
+            if (!expectedCRCHeader.isEmpty())
             {
-                // In từng byte dưới dạng 2 ký tự hex
-                ESP_LOGI("SHA", "%02x", hashResult[i]);
+                // Chuyển từ chuỗi hex sang số
+                uint32_t expectedCRC = strtoul(expectedCRCHeader.c_str(), NULL, 16);
+                ESP_LOGI(WIFI_TAG, "Expected CRC-32 from header: 0x%08X", expectedCRC);
+
+                // So sánh
+                if (firmwareCRC == expectedCRC)
+                {
+                    ESP_LOGI(WIFI_TAG, "CRC OK, proceed with firmware update.");
+
+                    // Nếu CRC khớp -> ta có thể tiến hành update firmware
+                    saveFilenameToNVS(filename);
+                    devicesTriggerEvent(EVENT_UPDATE_FIRMWARE_STM32);
+                }
+                else
+                {
+                    // Nếu CRC không khớp -> xóa file, báo lỗi
+                    ESP_LOGE(WIFI_TAG, "CRC mismatch! Removing the file.");
+                    SPIFFS.remove(STM32_FRIMWARE_PATH);
+                }
             }
-            uploadFile.close();
-
-            saveFilenameToNVS(filename);
-
-            devicesTriggerEvent(EVENT_UPDATE_FIRMWARE_STM32);
+            else
+            {
+                ESP_LOGW(WIFI_TAG, "No 'X-CRC32' header. Skip CRC check or handle error.");
+                saveFilenameToNVS(filename);
+                devicesTriggerEvent(EVENT_UPDATE_FIRMWARE_STM32);
+            }
         }
         else
         {
-            ESP_LOGE(WIFI_TAG, "Upload incomplete. Expected: %u, Received: %u", filesize, totalBytesReceived);
+            // Trường hợp không nhận đủ dữ liệu
+            ESP_LOGE(WIFI_TAG,
+                     "Upload incomplete. Expected: %u bytes, Received: %u bytes",
+                     filesize, totalBytesReceived);
+
+            // Xóa file do chưa nhận đủ
             SPIFFS.remove(STM32_FRIMWARE_PATH);
         }
     }
 }
+
 static void STM32UpdateResponseHandler(AsyncWebServerRequest *request)
 {
     // vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -412,8 +607,8 @@ static void STM32UpdateResponseHandler(AsyncWebServerRequest *request)
     {
         Stm32_Target_Found = "ERROR";
         devicesTriggerEvent(EVENT_UPDATE_FIRMWARE_STM32);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
     if (Stm32_Target_Found != "ERROR")
     {
         String msg;
@@ -621,9 +816,16 @@ void DEV_Wifi::startServices()
     server.on("/update/esp32", HTTP_OPTIONS, corsPreflightResponse);
     server.on("/update/stm32", HTTP_POST, STM32UpdateResponseHandler, HandleSTM32Update);
     server.on("/update/stm32", HTTP_OPTIONS, corsPreflightResponse);
-    server.on("/measurement", HTTP_GET, SensorhandleRequest);
     server.on("/forceupdate", STM32UpdateForceUpdateHandler);
     server.on("/forceupdate", HTTP_OPTIONS, corsPreflightResponse);
+
+    server.on("/measurement", HTTP_GET, SensorhandleRequest);
+    server.on("/stepperUpdate", HTTP_POST, [](AsyncWebServerRequest *request)
+              {
+    // Truyền sang hàm handlePwmUpdate
+    handlePwmUpdate(request); });
+
+    server.on("/getStepperConfig", HTTP_GET, handleGetPwmConfig);
 
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
     DefaultHeaders::Instance().addHeader("Access-Control-Max-Age", "600");

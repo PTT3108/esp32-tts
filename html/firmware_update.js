@@ -60,7 +60,7 @@ function completeHandler(event) {
         }
         let percent = 0;
         const interval = setInterval(() => {
-            percent = percent + 1;
+            percent = percent + 2;
 
             _('progressBar').value = percent;
             _('status').innerHTML = percent + '% flashed... please wait';
@@ -137,6 +137,29 @@ function abortHandler(event) {
     });
 }
 
+function computeCRC32(arrayBuffer) {
+    const data = new Uint8Array(arrayBuffer);
+    let crc = 0xFFFFFFFF;
+
+    for (let i = 0; i < data.length; i++) {
+        crc ^= data[i];
+        for (let j = 0; j < 8; j++) {
+            if ((crc & 1) === 1) {
+                crc = (crc >>> 1) ^ 0xEDB88320;
+            } else {
+                crc >>>= 1;
+            }
+        }
+    }
+
+    // Đảo bit cuối
+    crc ^= 0xFFFFFFFF;
+
+    // Trả về chuỗi hex 8 ký tự (ví dụ "1a2b3c4d")
+    return ("00000000" + (crc >>> 0).toString(16)).slice(-8);
+}
+
+// Hàm upload firmware
 async function startUpdateProcess(deviceType) {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
@@ -155,41 +178,39 @@ async function startUpdateProcess(deviceType) {
 
     // Nếu không có file, gửi 0
     if (!firmwareFile) {
-      formData.append('firmware', 0);
-      formData.append('device', 0);
-      formData.append('fileSize', 0);
-      xhr.setRequestHeader('X-FileSize', 0);
-      console.log("No firmware file selected.");
+        formData.append('firmware', 0);
+        formData.append('device', 0);
+        formData.append('fileSize', 0);
+        xhr.setRequestHeader('X-FileSize', 0);
+        console.log("No firmware file selected.");
     } else {
-      // Đọc toàn bộ file vào ArrayBuffer
-      const fileBuffer = await firmwareFile.arrayBuffer();
+        // Đọc toàn bộ file vào ArrayBuffer
+        const fileBuffer = await firmwareFile.arrayBuffer();
 
-      // Tính SHA-256 bằng Web Crypto API
-      const hashBuffer = await crypto.subtle.digest("SHA-256", fileBuffer);
+        // Tính CRC-32
+        const crcHex = computeCRC32(fileBuffer);
 
-      // Chuyển kết quả băm sang dạng hex
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+        // Thêm các trường vào FormData
+        formData.append('firmware', firmwareFile);
+        formData.append('device', deviceType);
+        formData.append('fileSize', firmwareFile.size);
+        formData.append('X-CRC32', crcHex);  // <-- Gửi kèm giá trị CRC
 
-      // Thêm các trường vào FormData
-      formData.append('firmware', firmwareFile);
-      formData.append('device', deviceType);
-      formData.append('fileSize', firmwareFile.size);
-      formData.append('sha256', hashHex);  // <-- Gửi kèm giá trị SHA-256
+        // Set header dung lượng file
+        xhr.setRequestHeader('X-FileSize', firmwareFile.size);
+        xhr.setRequestHeader('X-CRC32', crcHex);
 
-      // Set header dung lượng file
-      xhr.setRequestHeader('X-FileSize', firmwareFile.size);
-
-      // Debug thông tin
-      console.log(`Name: ${firmwareFile.name}`);
-      console.log(`Type: ${firmwareFile.type}`);
-      console.log(`Size: ${firmwareFile.size} bytes`);
-      console.log(`SHA-256: ${hashHex}`);
+        // Debug thông tin
+        console.log(`Name: ${firmwareFile.name}`);
+        console.log(`Type: ${firmwareFile.type}`);
+        console.log(`Size: ${firmwareFile.size} bytes`);
+        console.log(`CRC-32: ${crcHex}`);
     }
 
     // Gửi form
     xhr.send(formData);
-  }
+}
+
 
 function getDeviceStates() {
     fetch("/getStates")

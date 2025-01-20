@@ -26,6 +26,9 @@
         "cstdlib": "c",
         "random": "cpp",
         "compare": "cpp",
-        "cstdint": "cpp"
+        "cstdint": "cpp",
+        "ratio": "cpp",
+        "chrono": "cpp",
+        "typeinfo": "cpp"
     }
 }

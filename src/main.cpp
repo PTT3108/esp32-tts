@@ -10,6 +10,9 @@
 #include "SENSOR/devSensor.h"
 #include "STM32_UPDATE/dev_Stm32_Update.h"
 #include "helps.h"
+
+#include "PWM.h"
+
 device_affinity_t devices[] = {
     {&Button_device, 0},
     {&Stm32Update_device, 1},
@@ -77,9 +80,11 @@ void setupSerial()
 }
 void setup()
 {
+    pwm.init_pwm();
     setupSerial();
 
     SPIFFS.begin(true);
+
     
     wifi.initWiFi();
     wifi.connectWiFi();
