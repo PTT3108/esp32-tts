@@ -60,11 +60,8 @@ bool deviceStates[5] = {false, false, false, false, false};
 
 void SensorhandleRequest(AsyncWebServerRequest *request)
 {
-    StaticJsonDocument<70> doc;
-    JsonObject root = doc.to<JsonObject>();
-    JsonObject dataObj = root.createNestedObject("data");
-
-    // Cập nhật thông điệp cảm biến và nhận mã trạng thái
+    JsonDocument doc;
+    JsonObject dataObj = doc.to<JsonObject>();
     int status = updateSensormessage(dataObj);
     String jsonString;
     serializeJson(doc, jsonString);
@@ -216,6 +213,13 @@ void loadPWMConfigFromNVS()
 void handlePwmUpdate(AsyncWebServerRequest *request)
 {
     int params = request->params();
+    static uint32_t lastUpdatePwm;
+    if (lastUpdatePwm - millis() <= 1000)
+    {
+        request->send(400, "application/json", "{\"error\":\"Update Pwm fast\"}");
+        return;
+    }
+
     // Kiểm tra dữ liệu JSON trong body
     for (int i = 0; i < params; i++)
     {
@@ -226,7 +230,7 @@ void handlePwmUpdate(AsyncWebServerRequest *request)
     {
         String jsonBody = request->arg("plain"); // Chuỗi JSON
 
-        StaticJsonDocument<512> doc;
+        JsonDocument doc;
         DeserializationError err = deserializeJson(doc, jsonBody);
         if (err)
         {
@@ -234,6 +238,7 @@ void handlePwmUpdate(AsyncWebServerRequest *request)
             request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
             return;
         }
+        serializeJson(doc,Serial);
 
         // Lấy freq và dir cho từng channel
         // Dùng toán tử | (hoặc) như một cách đặt giá trị mặc định
@@ -278,7 +283,7 @@ void handleGetPwmConfig(AsyncWebServerRequest *request)
     uint8_t dir3 = preferences.getUChar("dir3", 0);
 
     // Dựng JSON trả về
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     doc["channel1"]["freq"] = freq1;
     doc["channel1"]["dir"] = dir1;
     doc["channel2"]["freq"] = freq2;

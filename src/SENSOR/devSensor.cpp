@@ -19,11 +19,9 @@ PHSensor *phSensor = new PHSensor();
 int updateSensormessage(JsonObject &doc)
 {
     MeasurementMessage *message = new MeasurementMessage();
-    JsonObject dataObj = doc["data"].to<JsonObject>();
-    message->phSensorMessage = phSensor->read();
     message->baro = baro->read();
     message->ina = INA.read();
-    message->serialize(dataObj);
+    message->serialize(doc);
     delete message;
     return 22000;
 }

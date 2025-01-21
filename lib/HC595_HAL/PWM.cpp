@@ -33,7 +33,13 @@ void EX_PWM::set_pwm_duty(int pin, int duty)
 
         // Tính toán số lượng ticks PWM dựa trên chu kỳ duty
         const uint32_t duty_ticks = (pindata.pwm_cycle_ticks * duty) / 255;
-        pindata.pwm_duty_ticks = duty_ticks;
+        if (duty == 0 || duty == pindata.pwm_cycle_ticks)
+        {                                                                     // max or min (i.e., on/off)
+            pindata.pwm_duty_ticks = 0;                                       // turn off PWM for this pin
+            (duty_ticks == pindata.pwm_cycle_ticks) ? SBI32(i2s_port_data, pinlo) : CBI32(i2s_port_data, pinlo); // set pin level
+        }
+        else
+            pindata.pwm_duty_ticks = duty_ticks;
 
         ESP_LOGI(TAG, "Set duty: pin: %d, duty: %d, pwm_duty_ticks: %d", pin, duty, duty_ticks);
     }
@@ -48,12 +54,19 @@ void EX_PWM::set_pwm_frequency(int pin, uint32_t f)
     if (pin > 127)
     {
         // Tính toán chu kỳ PWM dựa trên tần số (f)
-        pwm_pin_data[pin & 0x7F].pwm_cycle_ticks = 1000000UL / f / 4; // Số 4µs tick trong một chu kỳ đầy đủ của PWM
-        ESP_LOGI(TAG, "pin: %d, pwm_cycle_ticks: %d, pwm_duty_ticks: %d, pwm_tick_count: %d",
-                 pin,
-                 pwm_pin_data[pin & 0x7F].pwm_cycle_ticks,
-                 pwm_pin_data[pin & 0x7F].pwm_duty_ticks,
-                 pwm_pin_data[pin & 0x7F].pwm_tick_count);
+        if (f == 0)
+        {
+            set_pwm_duty(pin, 0);
+        }
+        else
+        {
+            pwm_pin_data[pin & 0x7F].pwm_cycle_ticks = 1000000UL / f / 4; // Số 4µs tick trong một chu kỳ đầy đủ của PWM
+            ESP_LOGI(TAG, "pin: %d, pwm_cycle_ticks: %d, pwm_duty_ticks: %d, pwm_tick_count: %d",
+                     pin,
+                     pwm_pin_data[pin & 0x7F].pwm_cycle_ticks,
+                     pwm_pin_data[pin & 0x7F].pwm_duty_ticks,
+                     pwm_pin_data[pin & 0x7F].pwm_tick_count);
+        }
         return;
     }
 
